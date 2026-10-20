@@ -11,7 +11,7 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QWidget(parent)
-    , m_client(new LlmClient(this))  // [новое на шаге 2]
+    , m_client(new LlmClient(this))
 {
     setWindowTitle(QStringLiteral("Локальный ассистент (llama.cpp)"));
 
@@ -39,8 +39,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::onSend);
     connect(m_input, &QLineEdit::returnPressed, this, &MainWindow::onSend);
 
-    // --- Связываем сигналы сетевого слоя с окном ---   [новое на шаге 2]
-    connect(m_client, &LlmClient::answerReady, this, &MainWindow::onAnswer);
+    // --- Связываем сигналы сетевого слоя с окном ---   [изменено на этапе 4]
+    connect(m_client, &LlmClient::chunkReceived, this, &MainWindow::onChunk);
+    connect(m_client, &LlmClient::finished, this, &MainWindow::onFinished);
     connect(m_client, &LlmClient::errorOccurred, this, &MainWindow::onError);
 }
 
@@ -52,29 +53,39 @@ void MainWindow::onSend()
 
     m_transcript += QStringLiteral("**Вы:** ") + question + QStringLiteral("\n\n");
     m_input->clear();
+    m_currentAnswer.clear();  // [этап 4]
 
-    setBusy(true);             // [изменено на шаге 2: вместо заглушки]
-    m_client->ask(question);   // [изменено на шаге 2: настоящий запрос]
+    setBusy(true);
+    m_client->ask(question);
 }
 
-// [новое на шаге 2]
-void MainWindow::onAnswer(const QString &text)
+// [этап 4] Каждый кусочек дописываем в конец и сразу показываем
+void MainWindow::onChunk(const QString &text)
 {
-    // Подпись на отдельной строке: если ответ начнётся со списка или кода,
-    // Markdown не сломается
-    m_transcript += QStringLiteral("**Модель:**\n\n") + text + QStringLiteral("\n\n");
+    m_currentAnswer += text;
+    refreshChat();
+}
+
+// [этап 4] Ответ дописан до конца: переносим его в историю
+void MainWindow::onFinished()
+{
+    m_transcript += QStringLiteral("**Модель:**\n\n") + m_currentAnswer + QStringLiteral("\n\n");
+    m_currentAnswer.clear();
     setBusy(false);
 }
 
-// [новое на шаге 2]
 void MainWindow::onError(const QString &message)
 {
+    // [этап 4] Если модель успела что-то напечатать до ошибки — сохраняем это
+    if (!m_currentAnswer.isEmpty())
+        m_transcript += QStringLiteral("**Модель:**\n\n") + m_currentAnswer + QStringLiteral("\n\n");
+    m_currentAnswer.clear();
+
     m_transcript += QStringLiteral("**Ошибка:** ") + message
                   + QStringLiteral("\n\n*Проверьте, что llama-server запущен на порту 8080.*\n\n");
     setBusy(false);
 }
 
-// [новое на шаге 2]
 void MainWindow::setBusy(bool busy)
 {
     m_busy = busy;
@@ -89,8 +100,13 @@ void MainWindow::setBusy(bool busy)
 void MainWindow::refreshChat()
 {
     QString text = m_transcript;
-    if (m_busy)
-        text += QStringLiteral("*Модель думает…*\n\n");  // [новое на шаге 2]
+    if (m_busy) {
+        // [этап 4] Пока кусочков нет — «думает», дальше — растущий ответ
+        if (m_currentAnswer.isEmpty())
+            text += QStringLiteral("*Модель думает…*\n\n");
+        else
+            text += QStringLiteral("**Модель:**\n\n") + m_currentAnswer + QStringLiteral("\n\n");
+    }
 
     // setMarkdown превращает **жирный**, списки и код в оформленный текст
     m_chatView->setMarkdown(text);
