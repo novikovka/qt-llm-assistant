@@ -21,22 +21,28 @@ public:
     // ответ будет приходить кусочками через сигнал chunkReceived.
     void ask(const QString &question);
 
+    // Прервать текущий ответ (кнопка «Стоп»)                          [этап 4, шаг 2]
+    void stop();
+
 signals:
-    void chunkReceived(const QString &text);    // очередной кусочек ответа  [этап 4]
-    void finished();                            // ответ полностью получен   [этап 4]
+    void chunkReceived(const QString &text);    // очередной кусочек ответа
+    void finished();                            // ответ полностью получен
+    void stopped();                             // ответ прерван пользователем [этап 4, шаг 2]
     void errorOccurred(const QString &message); // что-то пошло не так
 
 private slots:
-    void onReadyRead();       // пришла новая порция данных из сети  [этап 4]
-    void onReplyFinished();   // соединение закрыто                  [этап 4]
+    void onReadyRead();       // пришла новая порция данных из сети
+    void onReplyFinished();   // соединение закрыто
 
 private:
-    // Разобрать одну строку потока вида "data: {...}"               [этап 4]
+    // Разобрать одну строку потока вида "data: {...}"
     void processLine(const QByteArray &line);
+    // Перевести техническую ошибку в понятное сообщение            [этап 4, шаг 2]
+    static QString friendlyError(QNetworkReply *reply);
 
     QNetworkAccessManager *m_manager = nullptr; // отправляет HTTP-запросы
     QUrl m_url;                                 // адрес llama-server
 
-    QNetworkReply *m_reply = nullptr;  // текущий запрос (нужен, чтобы читать и останавливать) [этап 4]
-    QByteArray m_buffer;               // недочитанный хвост: строка может прийти половинкой  [этап 4]
+    QNetworkReply *m_reply = nullptr;  // текущий запрос (нужен, чтобы читать и останавливать)
+    QByteArray m_buffer;               // недочитанный хвост: строка может прийти половинкой
 };

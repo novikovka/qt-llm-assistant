@@ -23,7 +23,7 @@ void LlmClient::ask(const QString &question)
 
     QJsonObject body;
     body.insert(QStringLiteral("messages"), QJsonArray{message});
-    body.insert(QStringLiteral("stream"), true);  // [этап 4] просим отвечать по кусочкам
+    body.insert(QStringLiteral("stream"), true);  // просим отвечать по кусочкам
 
     QNetworkRequest request(m_url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -31,13 +31,21 @@ void LlmClient::ask(const QString &question)
     m_buffer.clear();
     m_reply = m_manager->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
 
-    // [этап 4] readyRead — каждый раз, когда из сети пришла новая порция данных;
-    // finished — когда соединение закрылось (ответ дочитан или ошибка)
+    // readyRead — каждый раз, когда из сети пришла новая порция данных;
+    // finished — когда соединение закрылось (ответ дочитан, ошибка или «Стоп»)
     connect(m_reply, &QNetworkReply::readyRead, this, &LlmClient::onReadyRead);
     connect(m_reply, &QNetworkReply::finished, this, &LlmClient::onReplyFinished);
 }
 
-// [этап 4]
+// [этап 4, шаг 2]
+void LlmClient::stop()
+{
+    // abort() рвёт соединение. llama-server замечает обрыв и перестаёт генерировать.
+    // Qt сразу вызовет onReplyFinished с ошибкой OperationCanceledError.
+    if (m_reply)
+        m_reply->abort();
+}
+
 void LlmClient::onReadyRead()
 {
     if (!m_reply)
@@ -56,7 +64,6 @@ void LlmClient::onReadyRead()
     }
 }
 
-// [этап 4]
 void LlmClient::processLine(const QByteArray &line)
 {
     // Нас интересуют только строки "data: ..."; пустые строки-разделители пропускаем
@@ -79,7 +86,6 @@ void LlmClient::processLine(const QByteArray &line)
         emit chunkReceived(piece);
 }
 
-// [этап 4]
 void LlmClient::onReplyFinished()
 {
     QNetworkReply *reply = m_reply;
@@ -88,8 +94,15 @@ void LlmClient::onReplyFinished()
         return;
     reply->deleteLater();  // освободить память после выхода из функции
 
+    // [этап 4, шаг 2] Остановка пользователем — это не ошибка
+    if (reply->error() == QNetworkReply::OperationCanceledError) {
+        m_buffer.clear();
+        emit stopped();
+        return;
+    }
+
     if (reply->error() != QNetworkReply::NoError) {
-        emit errorOccurred(reply->errorString());
+        emit errorOccurred(friendlyError(reply));  // [этап 4, шаг 2] понятный текст
         return;
     }
 
@@ -99,4 +112,28 @@ void LlmClient::onReplyFinished()
     m_buffer.clear();
 
     emit finished();
+}
+
+// [этап 4, шаг 2]
+QString LlmClient::friendlyError(QNetworkReply *reply)
+{
+    switch (reply->error()) {
+    case QNetworkReply::ConnectionRefusedError:
+    case QNetworkReply::HostNotFoundError:
+        // Никто не слушает порт 8080: сервер не запущен
+        return QStringLiteral("Сервер модели недоступен. Запустите llama-server на порту 8080.");
+    case QNetworkReply::RemoteHostClosedError:
+        // Сервер закрыли во время ответа
+        return QStringLiteral("Сервер модели разорвал соединение во время ответа.");
+    default:
+        break;
+    }
+
+    // Сервер ответил, но с кодом ошибки (например, 500)
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (status >= 400)
+        return QStringLiteral("Сервер модели вернул ошибку HTTP %1.").arg(status);
+
+    // Всё остальное — как есть, техническим текстом Qt
+    return reply->errorString();
 }
